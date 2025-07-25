@@ -1,0 +1,560 @@
+---
+title: "Exploratory analysis of the Swiss landslide damage database (1972-2023)"
+subtitle: 'Master thesis'
+author: "Mathilde Dunand"
+date: "`r format(Sys.time(), '%d/%m/%Y')`"
+output:
+  pdf_document:
+    toc: true
+  html_document:
+    toc: true 
+editor_options: 
+  chunk_output_type: inline
+  markdown: 
+    wrap: sentence
+urlcolor: blue
+---
+```{r setup, include = FALSE}
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+# Assurez-vous que le package tinytex est installé
+if (!requireNamespace("tinytex", quietly = TRUE)) install.packages("tinytex")
+
+# Installez TinyTeX
+#tinytex::install_tinytex(force = TRUE)
+```
+
+```{r  global-options, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, echo=FALSE, fig.align="center")
+```
+
+# 1) Introduction
+In order to understand the characteristics of the database of landslide damage in Switzerland between the years 1972 and 2023, I will carry out an exploratory analysis of this database.
+
+
+# 2) Swiss landslide damage dataset
+In Switzerland, data on the occurrence of landslides is made available by the Swiss Federal Institute for Forest, Snow and Landscape Research (WSL). This database is rich and available over a long period. It has collected all data relating to damage caused by natural events (floods, debris flows and landslides) since 1972. Initially, the incidents were known from newspaper reports and historical writings, but with advances in technology it has become possible to acquire these incidents using more sophisticated means. A wide range of information is available for each event: x and y coordinates, the nearest municipality, the canton, the date, the time, the type of process, data on the duration of the rainfall, the number of people killed, injured and evacuated, as well as the number of animals killed, injured and evacuated, and the cost of the infrastructure affected. For this study, only landslides will be taken into account.
+
+# 3) Package installation and loading of librairies
+
+```{r, message = FALSE, warning = FALSE, include = FALSE}
+
+(.packages())
+
+install.packages("readxl")
+install.packages("ggplot2")
+install.packages("sf")
+install.packages("ggspatial")
+install.packages("splancs")
+install.packages("readxl")
+
+#library(splancs)
+library(sf)
+library(ggplot2)
+library(sp)
+```
+
+# 4) Import Swiss landslide damage dataset
+In this section I will load the Swiss landslide damage dataset in the period 1972-2023.
+
+```{r import-data, results = 'hide'}
+# Import Swiss landslide damage dataset
+library(readxl)
+SL <- read_excel("C:/Users/Mathilde/Desktop/MathildeUNIL/Master/Travail de Master/AE_Landslides_1972_2023/swiss_landslide_damage_data_1972_2023.xlsx")
+```
+
+# 5.1) Preparation of data
+They then have to be prepared for analysis. First of all, there's a problem with the hours. I'm going to change the format so that it's in an hourly format and not a numerical one.
+
+```{r preparation of data, results = 'hide', message = FALSE, warning = FALSE}
+# Preparation of data for analysis
+# Structure of each column of data
+str(SL)
+
+# Transformer les fractions en secondes (1 jour = 86400 secondes)
+secondes <- SL$time * 86400
+
+# Convertir en format "HH:MM:SS" sans date
+SL$time <- format(as.POSIXct(secondes, origin = "1970-01-01", tz = "UTC"), "%H:%M:%S")
+```
+# 6) Explanatory analyses
+Now that the data is correct and in the right format, the exploratory analyses can begin.
+
+# 6.1) Distribution of LS by year
+Firstly, I want to see the distribution of landslides by years. To do this, I first need to extract the years from the date and then I can create a graph.
+
+```{r Distribution LS over the years, echo = FALSE, results = 'hide'}
+# Extract the year from the date 
+# Load lubridate to extract years
+library(lubridate)
+
+# Extract the year from the ‘date’ column
+SL$year <- year(SL$date)
+
+# Check the first lines
+head(SL$year)
+
+# Load ggplot2
+library(ggplot2)
+
+# Create a histogram with ggplot2
+ggplot(SL, aes(x = year)) + 
+  geom_histogram(binwidth = 1, fill = "lightblue", color = "black") +
+  labs(title = "Number of landslides by year",
+       x = "Year",
+       y = "Number of landslides") +
+  theme_minimal()
+```
+This graph shows the number of landslides per year. There has been no clear increase or decrease in the number of landslides since 2005. However, it should be noted that in 2005, a large number of events occurred as a result of the heavy rainfall that year.
+
+# 6.2) Distribution of landslides by month
+
+It may also be interesting to study the distribution of landslides between the different months of the year. This would show whether there is a seasonal pattern to the frequency of landslides.
+
+```{r Distribution LS over the month, echo = FALSE, results = 'hide'}
+# Load lubridate to extract the months
+library(lubridate)
+
+# Extract the month from the ‘date’ column
+SL$month <- month(SL$date, label = TRUE, abbr = TRUE)
+
+# Check the first lines after extracting the month
+head(SL$month)
+
+# Load ggplot2
+library(ggplot2)
+
+# Create a barplot with ggplot2 to see the distribution by month
+ggplot(SL, aes(x = month)) + 
+  geom_bar(fill = "lightblue", color = "black") +
+  labs(title = "Number of landslides by month",
+       x = "Month",
+       y = "Number of landslides") +
+  theme_minimal()
+```
+This histogram shows that there are more landslides in summer and spring. This can be explained by the snow melting in spring and the much more intense rainfall in the form of thunderstorms in summer.
+
+# 6.3) Evaluation of the precision of the date
+In the WSL data table, there is a date for each landslide event. However, a ‘MAXO date’ column indicates the precision of the date. I'm going to do some statistics on the accuracy of this date.
+```{r Evaluation of the precision of the date, echo = FALSE}
+# Count the occurrences of each category in the ‘MAXO date’ column
+statistiques_maxo <- table(SL$`MAXO date`)
+
+# Show results
+print(statistiques_maxo)
+
+# Calculate proportions and transform them into percentages
+pourcentages_maxo <- prop.table(table(SL$`MAXO date`)) * 100
+
+# Display results as percentages
+print(pourcentages_maxo)
+
+# Load ggplot2
+library(ggplot2)
+
+# Transform statistics into a data frame for ggplot2
+df_statistiques_maxo <- as.data.frame(statistiques_maxo)
+
+# Rename columns for ggplot
+colnames(df_statistiques_maxo) <- c("MAXO_date", "Count")
+
+# Create a barplot with ggplot2
+ggplot(df_statistiques_maxo, aes(x = MAXO_date, y = Count)) +
+  geom_bar(stat = "identity", fill = "lightblue", color = "black") +
+  labs(title = "Distribution of date precisions (MAXO date)",
+       x = "Precision (M, A, X, O)",
+       y = "Number of occurences") +
+  theme_minimal()
+```
+We can see that over 78% of the date data comes from actual measurements, which shows that the precision of the daily data is quite good. M represents Measurable, A Assumption, O not determinable and X unclear.
+
+# 6.4) Number of landslides with time information per year
+One piece of information that is of particular interest to us is the number of landslides that have information on the time at which the event occurred. We are going to see if there are more and more events that have information about the time over time or if this distribution is random.
+
+```{r Number of landslides with time information per year, echo = FALSE}
+# Load lubridate to extract years
+library(lubridate)
+
+# Extract the year from the ‘date’ column
+SL$year <- year(SL$date)
+
+# Filter the data for which the time is available
+data_with_time <- SL[!is.na(SL$time), ]
+
+# Count the number of landslides per year between 2005 and 2020
+counts_per_year <- table(data_with_time$year)
+
+print(counts_per_year)
+```
+# 6.5) Combination of the number of landslides with those with time information
+Now that we know how many landslides have time information, we need to compare this with the total number of landslides per year.
+
+```{r Combination of the number of landslides with those with time information, echo = FALSE}
+# Count the total number of landslides per year
+total_per_year <- table(SL$year)
+
+# Filter the data for which the time is available
+data_with_time <- SL[!is.na(SL$time), ]
+
+# Count the number of landslides with an available hour per year
+with_time_per_year <- table(data_with_time$year)
+
+# Create a vector containing all the years from 2005 to 2020
+all_years <- 1972:2023
+
+# Obtain total values for all years
+total_counts <- as.numeric(total_per_year[as.character(all_years)])
+total_counts[is.na(total_counts)] <- 0
+
+# Obtain values with time for all years
+time_counts <- as.numeric(with_time_per_year[as.character(all_years)])
+time_counts[is.na(time_counts)] <- 0
+
+# Create a data frame combining the two types of count (number and percentage)
+df_combined <- data.frame(
+  Year = all_years,
+  Total = total_counts,
+  With_Time = time_counts
+)
+
+# Display the dataframe for verification
+print(df_combined)
+
+# Load ggplot2
+library(ggplot2)
+
+# Transform the data frame for ggplot2 (in ‘long format’)
+df_combined_long <- reshape2::melt(df_combined, id.vars = "Year")
+
+# Create a graph with ggplot2
+ggplot(df_combined_long, aes(x = Year, y = value, fill = variable)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black") +
+  labs(title = "Total number of landslides and those with time information per year",
+       x = "Year",
+       y = "Number of landslide") +
+  scale_x_continuous(breaks = seq(min(all_years), max(all_years), by = 5)) +
+  scale_fill_manual(values = c("Total" = "lightblue", "With_Time" = "darkblue"), 
+                    name = "Type", 
+                    labels = c("Total", "With time")) +
+  theme_minimal()
+```
+# 6.6) Percentage of landslides with time information compared to the total for the year
+To make the number of events with information about the time of occurrence more representative, I'm going to represent them as a percentage. This will make it easier to compare one year with another.
+```{r percentage of landslides time info compated to total of year, echo = FALSE, message = FALSE}
+# Create a vector containing all the years from 2005 to 2020
+all_years <- 1972:2023
+
+# Obtain total values for all years
+total_counts <- as.numeric(total_per_year[as.character(all_years)])
+total_counts[is.na(total_counts)] <- 0
+
+# Obtain values with time for all years
+time_counts <- as.numeric(with_time_per_year[as.character(all_years)])
+time_counts[is.na(time_counts)] <- 0
+
+# Calculate the percentage of landslides with time available
+pourcentages_heure <- (time_counts / total_counts) * 100
+pourcentages_heure[is.na(pourcentages_heure)] <- 0  # Replace NAn by 0
+
+# Create a data frame with the results
+df_pourcentages <- data.frame(
+  annee = all_years,
+  Total = total_counts,
+  Avec_Heure = time_counts,
+  Pourcentage = round(pourcentages_heure, 2)  # Round percentages to 2 decimal places
+)
+
+# Display results table
+print(df_pourcentages)
+
+# Load ggplot2
+library(ggplot2)
+
+# Create a graph for the percentage of landslides with time data
+ggplot(df_pourcentages, aes(x = annee, y = Pourcentage)) +
+  geom_line(color = "black", linewidth = 1) +           # Black line
+  geom_point(color = "red", linewidth = 2) +           # Red points for each year
+  labs(title = "Evolution of the percentage of landslides with time information",
+       x = "Year",
+       y = "Percentage (%)") +
+  scale_x_continuous(
+    breaks = seq(min(all_years), max(all_years), by = 5)  # Un label tous les 5 ans
+  ) + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+We can see a clear trend here. Technologies have advanced over times and it's easier to obtain data on the time of occurrence.
+
+# 6.7) Evaluation of the precision of the time
+In the WSL data table, there is a column called MAXO time which indicates the accuracy of the time at which the landslide occurred. M stands for measurable, A for assumption, X for unclear and O for not determinable.
+```{r Precision of time, echo = FALSE}
+# Count the occurrences of each category in the ‘MAXO date’ column
+statistiques_maxo_t <- table(SL$`MAXO time`)
+
+# Display the results
+print(statistiques_maxo_t)
+
+# Calculate proportions and transform them into percentages
+pourcentages_maxo_t <- prop.table(table(SL$`MAXO time`)) * 100
+
+# Display results as percentages
+print(pourcentages_maxo_t)
+
+# Load ggplot2
+library(ggplot2)
+
+# Transform statistics into a data frame for ggplot2
+df_statistiques_maxo_t <- as.data.frame(statistiques_maxo_t)
+
+# Rename columns for ggplot
+colnames(df_statistiques_maxo_t) <- c("MAXO_time", "Count")
+
+# Create a barplot with ggplot2
+ggplot(df_statistiques_maxo_t, aes(x = MAXO_time, y = Count)) +
+  geom_bar(stat = "identity", fill = "lightblue", color = "black") +
+  labs(title = " Precise timing of landslides (MAXO time)",
+       x = "Precision (M, A, X, O)",
+       y = "Number of occurences") +
+  theme_minimal()
+```
+There are very few times that are precise and reliable (M). More than 1100 are not determinable. WSL provides no further information on the time of occurrence of the landslides. For each event, there is a description of a few sentences, but if the time is not mentioned in the table, the description says nothing about it.
+
+# 6.8) Statistics on the number of landslides with information on the total time
+```{r statistics on number of LS with time info, echo = FALSE}
+# Total number of landslides
+total_glissements <- nrow(SL)
+
+# Number of landslides with time information
+nb_glissements_avec_heure <- sum(!is.na(SL$time))
+
+# Calculate the percentage
+pourcentage_avec_heure <- (nb_glissements_avec_heure / total_glissements) * 100
+
+# Display the results
+print(paste("Number of landslides with time information :", nb_glissements_avec_heure))
+print(paste("Percentage of landslides with time information :", round(pourcentage_avec_heure, 2), "%"))
+```
+Less than 30% of landslides have time information in this dataset.
+
+# 6.9) Map showing the location of all landslides between 1972 and 2023
+```{r map, echo = FALSE, results ='hide'}
+library(ggplot2)
+library(sf)
+library(ggspatial)
+
+data_sf <- st_as_sf(SL, coords = c("x-coordinate", "y-coordinate"), crs = 2056) 
+
+# Create the map
+ggplot() +
+  geom_sf(data = data_sf, color = "black", size = 1) +  
+  labs(title = "Location of all landslides between 1972 and 2023") +
+theme_minimal()
+```
+
+# 6.10) Statistics on costs generated by landslides per year
+In this section, I will extract the most important data regarding the costs generated by landslides: total costs, average and median costs per event and finally a graph showing the evolution of total costs per year.
+```{r}
+SL$`total damage costs [mio. CHF]` <- as.numeric(SL$`total damage costs [mio. CHF]`)
+```
+
+
+```{r Total sum of costs, echo = FALSE}
+# Total sum of costs
+somme_totale <- sum(SL$`total damage costs [mio. CHF]`, na.rm = TRUE)
+print(paste("Total cost due to landslides :", somme_totale, "Mio CHF"))
+```
+```{r Average cost per event, echo = FALSE}
+# Average cost per event
+cout_moyen <- mean(SL$`total damage costs [mio. CHF]`, na.rm = TRUE)
+print(paste("Average cost per landslide :", round(cout_moyen, 2), "Mio CHF"))
+```
+```{r Median cost per event, echo = FALSE}
+# Median cost per event
+cout_median <- median(SL$`total damage costs [mio. CHF]`, na.rm = TRUE)
+print(paste("Median cost per landslide :", round(cout_median, 2), "Mio CHF"))
+```
+
+```{r Analysis of costs by year, echo = FALSE}
+# Analysis of costs by year
+SL$year <- format(SL$date, "%Y")  # Extract the year of the date
+
+# Total cost per year
+cout_total_par_annee <- aggregate(`total damage costs [mio. CHF]` ~ year, data = SL, sum, na.rm = TRUE)
+
+ggplot(cout_total_par_annee, aes(x = as.numeric(year), y = `total damage costs [mio. CHF]`)) +
+  geom_line(color = "blue") +
+  labs(title = "Evolution of the total cost due to landslides per year",
+       x = "Year",
+       y = "Total cost (Mio CHF)") +
+  theme_minimal()
+```
+It can be seen that, on average, landslides cause only minor damage in terms of cost, but over 52 years this still represents more than CHF 800 million for the whole of Switzerland. The total cost per year fluctuates according to the number of landslides. In 2005, costs were at their highest because of the large number of landslides that occurred that year.
+
+# 6.11) Extent of damage
+There is yet another column which concerns the extent of the damage. Either the damage was not very extensive (gering) and cost between CHF 0.01 and 0.4 million, or it was average (mittel) and cost between CHF 0.4 and 2 million, or it was catastrophic (gross/katastrophal) and cost more than 2 million for a landslide.
+```{r extent of damage, echo = FALSE}
+# Count the occurrences of each category in the ‘MAXO date’ column
+statistiques_maxo_ed <- table(SL$`extent of damage, low [0.01-0.4], medium [0.4-2], large/catastrophic [>2] or death [mio. CHF]`)
+
+# Display the results
+print(statistiques_maxo_ed)
+
+# Calculate proportions and transform them into percentages
+pourcentages_maxo_ed <- prop.table(table(SL$`extent of damage, low [0.01-0.4], medium [0.4-2], large/catastrophic [>2] or death [mio. CHF]`)) * 100
+
+# Display results as percentages
+print(pourcentages_maxo_ed)
+
+# Load ggplot2
+library(ggplot2)
+
+# Transform statistics into a data frame for ggplot2
+df_statistiques_maxo_ed <- as.data.frame(statistiques_maxo_ed)
+
+# Rename columns for ggplot
+colnames(df_statistiques_maxo_ed) <- c("Extend of damage", "Count")
+
+```
+```{r extent of damage graph, echo = FALSE, message = FALSE}
+# Load ggplot2
+library(ggplot2)
+
+# Count the occurrences of each category in the ‘extent of damage’ column
+statistiques_maxo_ed <- table(SL$`extent of damage, low [0.01-0.4], medium [0.4-2], large/catastrophic [>2] or death [mio. CHF]`)
+
+# Calculate proportions and transform them into percentages
+pourcentages_maxo_ed <- prop.table(statistiques_maxo_ed) * 100
+
+# Transform statistics into a data frame for ggplot2
+df_statistiques_maxo_ed <- as.data.frame(statistiques_maxo_ed)
+df_statistiques_maxo_ed$Percentage <- pourcentages_maxo_ed
+
+# Rename columns for ggplot
+colnames(df_statistiques_maxo_ed) <- c("Extent of Damage", "Count", "Percentage")
+
+# Create a bar chart with ggplot2
+ggplot(df_statistiques_maxo_ed, aes(x = `Extent of Damage`, y = Count, fill = `Extent of Damage`)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Distribution of damage extent",
+       x = "Extent of damage",
+       y = "Number of occurences") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Create a bar chart with ggplot2 with percentage
+ggplot(df_statistiques_maxo_ed, aes(x = `Extent of Damage`, y = Percentage, fill = `Extent of Damage`)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Distribution of damage extent (Percentage)",
+       x = "Extent of damage",
+       y = "Perrcentage") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+This graph confirms that the majority of landslides involve very little cost.Over 90% are in the low category.
+
+# 6.12) Number of injuries and deaths per year due to landslides
+Sometimes landslides cause not just material damage, but also human suffering. That's why I'm going to take another look at the number of deaths, injuries and people evacuated as a result of landslides.
+
+```{r injuries and death per year, echo = FALSE}
+# Ensure that the ‘Deaths’, ‘Injuries’ and ‘Evacuated’ columns are numeric
+SL$Deaths <- as.numeric(SL$`number of dead persons`)
+SL$Injuries <- as.numeric(SL$`number of injured persons`)
+SL$Evacuated <- as.numeric(SL$`number of evacuated persons`)
+
+library(lubridate)
+library(ggplot2)
+library(dplyr)
+
+# Extract the year from the date
+SL$Year <- year(SL$date)
+
+# Calculate the total number of deaths and injuries per year
+statistiques_annuelles <- SL %>%
+  group_by(Year) %>%
+  summarise(Total_Deaths = sum(Deaths, na.rm = TRUE),
+            Total_Injuries = sum(Injuries, na.rm = TRUE),
+            Total_Evacuated = sum(Evacuated, na.rm = TRUE))
+
+# Display the results
+print(statistiques_annuelles)
+
+facteur <- max(statistiques_annuelles$Total_Injuries, na.rm = TRUE) /
+           max(statistiques_annuelles$Total_Deaths, na.rm = TRUE)
+
+# Plot the graph
+ggplot(statistiques_annuelles) +
+  geom_line(aes(x = Year, y = Total_Deaths, color = "Dead")) +
+  geom_point(aes(x = Year, y = Total_Deaths, color = "Dead")) +
+  geom_line(aes(x = Year, y = Total_Injuries, color = "Injured")) +
+  geom_point(aes(x = Year, y = Total_Injuries, color = "Injured")) +
+  #scale_y_continuous(sec.axis = sec_axis(~., name = "Total injured")) +
+  labs(title = "Total number of deaths and injuries per year",
+       x = "Year",
+       y = "Total deaths") +
+  scale_color_manual(name = "Legend", values = c("Dead" = "red", "Injured" = "blue")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Graph of total number of people evacuated per year
+ggplot(statistiques_annuelles, aes(x = Year, y = Total_Evacuated)) +
+  geom_bar(stat = "identity", fill = "lightgreen", color = "black") +
+  labs(title = "Total number of people evacuated per year",
+       x = "Year",
+       y = "Total evacuees") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+The number of people injured and killed each year is not enormous. However, it would be good if it were at 0 and people could be evacuated in time. There have never been more than 5 deaths per year, and no more than 15 people are injured each year. 2000 was the deadliest year. As for the number of people evacuated, it was very high in 1972 and around the year 2000. 
+
+# 4.8) Statistics on the number of dead, injured and evacuated animals per year
+Finally, the number of dead, injured or evacuated animals is also recorded by WSL in their database. Here's what can be said about them
+```{r injuries, death, evacuated animals per year, echo = FALSE}
+# Ensure that the ‘Deaths’, ‘Injuries’ and 'Evacuated' columns are numeric
+SL$Deaths <- as.numeric(SL$`number of dead animals`)
+SL$Injuries <- as.numeric(SL$`number of injured animals`)
+SL$Evacuated <- as.numeric(SL$`number of evacuated animals`)
+
+library(lubridate)
+library(ggplot2)
+library(dplyr)
+
+# Extract the year from the date
+SL$Year <- year(SL$date)
+
+
+# Calculate the total number of deaths and injuries per year
+statistiques_annuelles <- SL %>%
+  group_by(Year) %>%
+  summarise(Total_Deaths = sum(Deaths, na.rm = TRUE),
+            Total_Injuries = sum(Injuries, na.rm = TRUE),
+            Total_Evacuated = sum(Evacuated, na.rm = TRUE))
+
+# Display the results
+print(statistiques_annuelles)
+
+# Plot of the graph
+ggplot(statistiques_annuelles) +
+  geom_line(aes(x = Year, y = Total_Deaths, color = "Dead")) +
+  geom_point(aes(x = Year, y = Total_Deaths, color = "Dead")) +
+  geom_line(aes(x = Year, y = Total_Injuries, color = "Injured")) +
+  geom_point(aes(x = Year, y = Total_Injuries, color = "Injured")) +
+  #scale_y_continuous(sec.axis = sec_axis(~., name = "Total injured")) +
+  labs(title = "Total number of dead and injured animals per year",
+       x = "Year",
+       y = "Total number of dead animals") +
+  scale_color_manual(name = "Legend", values = c("Dead" = "red", "Injured" = "blue")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Graph of total number of people evacuated per year
+ggplot(statistiques_annuelles, aes(x = Year, y = Total_Evacuated)) +
+  geom_bar(stat = "identity", fill = "lightgreen", color = "black") +
+  labs(title = "Total number of animals evacuated per year",
+       x = "Year",
+       y = "Total number of animals evacuated per year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+

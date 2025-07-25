@@ -1,0 +1,1011 @@
+---
+title: "Susceptibility map for landslide in Switzerland with Random Forest (RF)"
+subtitle: "For the master thesis about landslides predictions with ML" 
+author: "Mathilde Dunand^[IDYST, University of Lausanne, mathilde.dunand@unil.ch]"
+date: "`r format(Sys.time(), '%d/%m/%Y')`"
+output:
+  pdf_document: default
+  html_document: default
+  toc: true 
+editor_options: 
+  chunk_output_type: inline
+  markdown: 
+    wrap: sentence
+bibliography: RF.bib
+---
+
+```{r  global-options, echo=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+## R Markdown
+
+This is an R Markdown document.
+Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents.
+For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+# 1) Introduction
+
+In this application, we explore the capabilities of a stochastic approach based on a machine learning (ML) algorithm to elaborate landslides susceptibility mapping in Switzerland.
+Generally speaking, ML includes a class of algorithms for the analysis, modelling, and visualization of environmental data and it performs particularly well to model environmental hazards, which naturally have a complex and non-linear behavior.
+Here we use Random Forest, an ensemble ML algorithm based on decision trees.
+
+The research framework that inspired this computational lab refers to a pioneering study in susceptibility mapping for wildfire eventy by @tonini_machine_2020 and further developed for the assessment of variable importance by @trucchia_machine-learning_2022.
+
+## 1.1) The main objective
+
+Landslides are one of the major hazard occurring around the world.
+In Switzerland, landslides cause damages to infrastructures and sometimes threaten human lives.
+Shallow landslides are triggered by intense rainfalls.
+Such slope movements are generally very rapid and hardly predictable.
+Different quantitative approaches have been developed to assess the most susceptible areas.
+
+This project applies a data-driven methodology based on Random Forest (RF) (@breiman_random_2001) to elaborate the landslides susceptibility map of Switzerland.
+RF is applied to a set of independent variables (i.e., the predictors) and dependent variables (the inventoried landslides and an equal number of locations for absences).
+
+
+\newpage
+
+## 1.2) Load the libraries
+
+To perform the analysis, we have first to install the following libraries:
+
+-   **library(raster)**: The raster package provides classes and functions to manipulate geographic (spatial) data in 'raster' format.
+
+-   **library(readr)**: The goal of 'readr' is to provide a fast and friendly way to read rectangular data (like 'csv', 'tsv', and 'fwf').
+
+-   **library(randomForest)**: Classification and regression based on a forest of trees using random inputs, based on [Breiman (2001)](https://link.springer.com/article/10.1023/A:1010933404324).
+
+-   **library(dplyr)**: It is the next iteration of plyr, focused on tools for working with data frames (hence the d in the name).
+
+-   **library(pROC)**: Allowing to compute, analyze ROC curves, and
+
+    -   **library(plotROC)** to display ROC curve
+
+-   **(ggplot2)**: Is a system for declaratively creating graphics.
+
+-   **library(sf)**: Support for simple features, a standardized way to encode spatial vector data.
+
+```{r libs-loaded, message = FALSE, warning = FALSE}
+library(raster) 
+library(readr) 
+library(randomForest)
+library(dplyr) 
+library(pROC) 
+library(plotROC) 
+library(ggplot2)  
+library(sf) 
+library(classInt)
+
+(.packages())
+```
+
+**List of the libraries**
+
+# 2) Import the data
+
+Two types of data will be imported:
+- Landslide data from the WSL: more specifically, data on damage caused by landslides from 1972 to 2023.
+  - Feature data: this includes DEM (Digital Elevation Model) data, land cover data, geomorphology data and distances to various roads calculated using the road layer from the TLM3D file. All data comes from the Swiss Confederation. 
+
+## 2.1) Predictor variables
+
+Selecting predictor variables is a key stage on susceptibility and risk modelling when using a data-driven approach.
+There is no consensus about the number of variables and which variables should be used for landslides assesment.
+
+For this project, I will use the following pedictor variables:
+
+-   **DEM (digital elevation model)**: provided by the Swiss Federal Office of Topography.
+    The elevation is not a direct conditioning factor for landslide; however, it can reflect differences in vegetation characteristics and soil. The resolution chosen for this layer is 100 m. Thanks to this layer, several other layers have been calculated: Slope, profile curvature, plan curvature, Flow accumulation and direction and TWI. 
+
+-   **Slope**: is one of the most explicating factor in landslide susceptibility modelling. It is calculated using the ArcGIS Pro slope tool with the DEM as the input raster and degrees as the unit.
+    It is computing as:
+
+$$Slope = arctan(\sqrt{(dz/dx)^2 + (dz/dy)^2)} * (\pi/2)$$
+-   **Curvature**: curvature is widely used in landslide susceptibility modelling.
+    It allows assessing the water flow acceleration and sediment transport process (*profile curvature*) and the water flow propensity to converge and diverge (*plan curvature*).
+    They were derived from DEM using the curvature tool in ArcGIS. By checking ‘plan curvature’ and ‘profile curvature’, I obtain three output layers: plan curvature, profile curvature, and curvature. Only the plan and profile curvature layers will be used in this work.
+    
+-   **Flow Direction & Flow Accumulation** : allow you to study water flows in the field. Both are built on ArcGIS Pro using the Flow Direction and Flow Accumulation tools respectively, with the DEM always used as the Input Raster.
+
+-   **TWI (topographical water index)**: topography plays a key role in the spatial distribution of soil hydrological conditions. This index measures the probability of water accumulation on a terrain based on its topography. This index is measured as ln(Flow Accumulation/tan(Slope)), for which the slope must be in radians. This is done in ArcGIS Pro using the Raster Calculator tool.
+    Defining $\alpha$ as the upslope contributing area describing the propensity of a cell to receive water, and $\beta$ as the slope angle, TWI (compute by the formula below), reflects the propensity of a cell to evacuate water:
+
+$$TWI=ln(\alpha/tan(\beta))$$
+-   **Distance to roads (distRoad)**: roads build in mountainous areas often cut the slope, weakening the cohesion of the soil.Moreover, roads surfaces are highly impermeable. On the SwissTLMRegio map, roads are represented by lines and are assigned to different road types. I separated these road types into three categories: motorways, footpaths and other roads directly in ArcGIS Pro using the Select By Attributes tool. I created a column so that each road could be assigned to one of these three groups using Field Calculator. Once the separation was complete, I created three shp layers for the three types of roads. Finally, using the Euclidean Distance tool in ArcGIS Pro, I created three raster layers showing the distance for each pixel to the three types of roads. The Euclidean Distance tool takes the shp of the three types of roads as the Input Raster and an output cell size of 100. 
+
+-   **Land Cover**: developed by the Swiss administration and based on aerial photographs and control points. This layer contains information on primary land cover (forest, settlement, etc.). The download link is available here : https://www.swisstopo.admin.ch/de/landschaftsmodell-swisstlmregio
+
+-   **Geology**: Cette couche aussi est téléchargé sur le site de la Confédération suisse. The GeoMaps 500 are a series of geological, tectonic, hydrogeological, geophysical and palaeoglaciological overview maps of Switzerland at a scale of 1:500'000. The download link is available here : https://www.swisstopo.admin.ch/en/geomaps-500
+
+This represents 12 variables that will be imported below in raster format (.tif). All layers were exported in raster format using ArcGIS Pro software.
+
+The problem is that when the raster file is exported to tif in ArcGIS Pro, a mask (rectangular) is created around Switzerland. That is why it was decided to create a mask from the .shp file of the Swiss borders for the layers of the 12 variables (features). This is done in the Script R Features.R.
+
+
+```{r import-raster}
+
+## Import raster (predictor variables) 100 meter resolution
+
+landcover<-as.factor(raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/Landcover.tif"))
+geology<-as.factor(raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/Geology.tif"))
+planCurv<-raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/plancurv.tif")
+profCurv<-raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/profcurv.tif")
+TWI<-raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/TWI.tif")
+Slope<-raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/Slope.tif")
+dem<-raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/DEM.tif")
+flow_acc <- raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/Flow_acc.tif")
+flow_dir <- raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/Flow_dir.tif")
+dist_routes <- raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/Dist_Routes.tif")
+dist_autoroutes <- raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/Dist_Autoroutes.tif")
+dist_fussweg <- raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/Dist_Fussweg.tif")
+```
+
+Some layers are not properly aligned. It is therefore necessary to align them with the DEM in order to stack them in the next step.
+
+```{r adjusted}
+# Adjust Landcover
+landcover_aligned <- resample(landcover, dem, method = "ngb")  # "ngb" = nearest neighbor
+
+# Adjust Geology
+geology_aligned <- resample(geology, dem, method = "ngb")
+
+# Adjust Dist_Autoroutes
+dist_autoroutes_aligned <- resample(dist_autoroutes, dem, method = "bilinear")  # ‘bilinear’ for continuous values
+
+# Adjust Dist_Fussweg
+dist_fussweg_aligned <- resample(dist_fussweg, dem, method = "bilinear")
+```
+
+Than the predictor variables (features) have to be aggregated.
+We use here the function **stack** to create a collection of RasterLayer objects with the same spatial extent and resolution.
+
+```{r stack-features}
+# Create a Raster stack
+features <- stack(dem, TWI, planCurv, profCurv, Slope, flow_acc, flow_dir, dist_routes, landcover_aligned, geology_aligned, dist_autoroutes_aligned, dist_fussweg_aligned)
+
+# Renames the variables
+names(features) <- c("DEM", "TWI", "planCurv", "profCurv", "Slope", "Flow_Accumulation", "Flow_Direction", "Dist_Routes", "LandCover", "Geology", "Dist_Autoroutes", "Dist_Fussweg")
+
+plot(features) # plot every features
+```
+
+### 2.1.1) The use of categorical variables in Machine Learning
+
+The majority of ML algorithms (e.g., support vector machines, artificial neural network, deep learning) makes predictions on the base of the proximity between the values of the predictors, computed in terms of euclidean distance.
+This means that these algorithms can not handle directly categorical values (i.e., qualitative descriptors).
+Thus, in most of the cases, categorical variables need to be transformed into a numerical format.
+One of the advantage of using Random Forest (as implemented in R) is that it can handle directly categorical variables, since the algorithm operate by constructing a multitude of decision trees at training time and the best split is chosen just by counting the proportion of each class observation.
+
+To understand the characteristics of the categorical variables, we plot the two rasters **LandCover** and **Geology** by using their original classes.
+To visualize the data, we use R as a GIS, but few data manipulations need to be perform.
+
+```{r col-pal, warning = FALSE}
+
+# Create a random color palette 
+library(RColorBrewer)
+n <- 50
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, 
+                           rownames(qual_col_pals)))
+
+# Load libraries for levelplot function, allowing to plot raster based of categorical data
+library(lattice)
+library(rasterVis)
+```
+
+-   **Raster geology**: extract the attribute table and plot the map based on the geology classes.
+
+```{r geology-map, results = FALSE}
+
+# Ensure that the raster attributes are read as type "factor"
+geology<- as.factor(raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/Geology.tif"))
+
+# Add a geological class column to the Raster Attribute Table
+rat <- levels(geology)[[1]] 
+rat$Geology_classes <- c("Limestone", "Gravel", "Conglomerate","Clay", "Sandstone", "Granite", "Slate", "Porphyrite", "Other", "Volcanic rock", "Gneiss", "Glacier", "Breccia", "Scree", "Amphibolite", "Schist", "Dolomite", "Porphyry", "River-Lake", "Phyllite", "Serpentinite", "Syenite", "Radiolarite", "Peridotite")
+
+levels(geology) <- rat
+levels(geology)
+
+# Plot the raster based on the geological classes 
+levelplot(geology, col.regions=col_vector)
+```
+
+-   **Raster land cover**: extract the attribute table and plot the map based on the landcover classes.
+
+```{r landCover-map, results = FALSE}
+
+# Ensure that the raster attributes are read as type "factor"
+landCover <- as.factor(raster("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Tiff/Landcover.tif"))
+
+# Add a landcover class column to the Raster Attribute Table
+ratLC <- levels(landCover)[[1]]
+ratLC$LandCover_classes <- c("Other","Forest","Marsh","Debris","Rock","Glacier","Lake","Dam lake","Vine","Built-up and populated areas","Orchard", "Downtown")
+
+levels(landCover) <- ratLC
+
+# Plot the raster based on the land cover classes 
+levelplot(landCover, col.regions=col_vector)
+```
+
+## 2.2) Landslides dataset
+
+In Switzerland, data on the occurrence of landslides is made available by the Swiss Federal Institute for Forest, Snow and Landscape Research (WSL). This database is rich and available over a long period. It has collected all data relating to damage caused by natural events (floods, debris flows and landslides) since 1972. Initially, the incidents were known from newspaper reports and historical writings, but with advances in technology it has become possible to acquire these incidents using more sophisticated means. A wide range of information is available for each event: x and y coordinates, the nearest municipality, the canton, the date, the time, the type of process, data on the duration of the rainfall, the number of people killed, injured and evacuated, as well as the number of animals killed, injured and evacuated, and the cost of the infrastructure affected. For this study, only landslides will be taken into account.
+
+The model includes the implementation of the landslide **pseudo-absences**, which are the areas where the hazardous events did not took place (i.e. landslide location is known and the mapped footprint areas are available, but the non-landslide areas have to be defined).
+Indeed, to assure a good generalization of the model and to avoid the overestimation of the absence, pseudo-absences need to be generated in all the cases where they are not explicitly expressed.
+In this case study, an equal number of point as for presences has been randomly generated in the study area, except within landslides polygons (6 km diameter) and lakes(that is what is called "validity domain", where events could potentially occur).
+
+Let's start by importing the landslide data that has been filtered according to the accuracy of the landslide location. It should first be noted that the WSL inventory lists the geographical coordinates of the damage caused by the landslides. These are not the geographical coordinates of the landslide's starting point, so they are not extremely accurate. One column in the inventory specifies whether the coordinates of the centre of the damage are known (‘bekannt’) or whether they are the coordinates of the centre of the municipality where the landslide occurred. Since the data is not very accurate to begin with, I decide to keep only those landslides that have coordinates that are ‘bekannt’ or that have coordinates at the municipal level but where the municipality in question is smaller than 10 km. The number of landslides available at the outset was 4'191; at this stage, there are more than 3'506 remaining.
+
+Below, I import the data between 1972 and 2010, keeping the last 13 years (2011–2023) to test my model. A histogram and a map show the distribution of these 2,899 landslides.
+
+```{r import-data-LS, results = FALSE}
+
+# Import the data
+LS_base <- read.csv("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/LS_tri_Gemeinde_2/glissements_filtrés.csv", sep = ";")
+
+# Convert the Date column to Date format
+LS_base$date <- as.Date(LS_base$date, format = "%d.%m.%Y")
+
+# Load ggplot2 and lubridate (for handling dates)
+library(ggplot2)
+library(lubridate)
+
+# Create a histogram by directly extracting the year
+ggplot(LS_base, aes(x = year(date))) + 
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "black") +
+  labs(title = "Number of landslides by year", 
+       x = "Year", 
+       y = "Number of landslides") +
+  theme_minimal()
+```
+
+```{r}
+# Check the structure after importing
+str(LS_base)
+
+# Mapping the remaining landslides
+par(mfrow = c(1,1), mar = c(4,4,2,2))
+plot(LS_base$X, LS_base$Y, pch = 20, cex = 0.7, asp = 1, xlab = "X-coordinates", ylab = "Y-coordinates")
+```
+
+# 2.2.1) Importing data in shp format
+The basic data is exported from .csv format to .shp format using ArcGIS Pro. Then, each landslide is projected onto all feature layers to obtain information from each layer for each landslide. At this point, I also remove landslides that include NA data so as not to skew the analyses that follow. Plotting the map of remaining landslides
+
+```{r}
+# Download landslides in shp format
+LS_presence <- st_read("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/LS_presence_features/LS_presence_features.shp")
+```
+# 2.2.1.1) Extraction and combination of values for each feature at each landslides
+```{r}
+# Extract raster values at points
+LS_presence_vals <- extract(features, as(LS_presence, "Spatial"))
+
+# Add raster data to landslides
+LS_presence_data <- cbind(LS_presence, LS_presence_vals)
+```
+
+LS_presence_data contains all the data present in LS_base, but in addition to this, we have the value of each feature at the coordinates of the 2'899 landslides.
+
+```{r}
+# Convert to data frame
+LS_presence_data_df <- as.data.frame(LS_presence_data)
+LS_presence_data_df <- LS_presence_data_df[ , -c(2:9)] # columns that are not important for this task are deleted.
+LS_presence_data_df <- na.omit(LS_presence_data_df) # deletes lines with NA
+
+# Export to a CSV file
+write.csv(LS_presence_data_df, "LS_presence_features.csv", row.names = FALSE)
+```
+
+Once the NA have been removed, we are left with 2'897 landslides representing occurrences. 
+
+# 2.2.2) Creating pseudo-absences in ArcGIS Pro
+Now that my presence data is ready, I need to create the set of pseudo-absences. As mentioned earlier, it is necessary to create the validity domain in which the pseudo-absence points will be randomly selected. 
+
+First, buffer zones are created with a radius of 3 km (= diameter of 6 km) around each landslide that actually occurred. Then, these buffer zones are combined with the lakes using the union tool. All these areas are finally excluded from Swiss territory using the erase tool, and the remainder forms the validity domain. Using the create random point tool, 2,898 pseudo-absence points are created (in the constraining feature class, we set the validity domain). Below, the same thing as above has been done but for pseudo-absences (extraction of raster values for pseudo-absences). 
+
+# 2.2.2.1) Extract raster values for pseudo-absences
+```{r}
+# Download the pseudo-absences
+pseudo_absences <- st_read("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Pseudo-absences_final/Pseudo_absences/Pseudo_absences_1.shp")
+```
+
+```{r}
+# Extract raster values at landslides points
+pseudo_absences_vals <- extract(features, as(pseudo_absences, "Spatial"))
+
+# Add raster data to pseudo-absences
+pseudo_absences_data <- cbind(pseudo_absences, pseudo_absences_vals)
+
+# Convert to dataframe
+pseudo_absences_data_df <- as.data.frame(pseudo_absences_data)
+colnames(pseudo_absences_data_df)[1] <- "ID" # add ID column
+```
+
+# 2.2.2.2) Adding an identification column
+
+Creation of a new ‘type’ column in each file: 0 for pseudo-absences and 1 for presences
+
+```{r}
+LS_presence_data_df$type <- 1
+pseudo_absences_data_df$type <- 0
+```
+
+# 2.2.2.3) Merge the two files and check that they have the same number of presences and pseudo-absences.
+```{r}
+LS_input <- rbind(LS_presence_data_df, pseudo_absences_data_df)
+table(LS_input$type)
+```
+Here, the number differs from one event, but I don't think that's a problem. It's because of create random point in ArcGIS. If you want to create 2897 points, you have to enter 2897/2, and since it's not a round number, it doesn't work.
+
+# 2.2.2.4) Finalize the input dataset
+
+```{r input-dataset, results = FALSE}
+
+# Convert Land cover and Geology classes as factor
+LS_input$LandCover<-as.factor(LS_input$LandCover)
+LS_input$Geology<-as.factor(LS_input$Geology)
+
+# Remove extra column (ID)
+LS_input <- LS_input[-1]
+
+# Explore the newly created input dataset
+head(LS_input)
+str(LS_input)
+
+write.csv(LS_input, "LS_input.csv", row.names = FALSE) # Export final file
+```
+LS_input contains all the landslide data that will be used in machine learning models later on. This dataset therefore contains 5'795 events.
+
+## 3) Random Forest for Susceptibility Map
+
+## 3.1) Split the input dataset into training/validation
+
+A well-established procedure in ML is to split the input dataset into training, validation, and testing.
+
+-   The **training dataset** is needed to calibrate the parameters of the model, which will be used to get predictions on new data.
+
+-   The purpose of the **validation dataset** is to optimize the hyperparameter of the model (*training phase*).
+    **NB**: in Random Forest this subset is represented by the Out-Of-Bag (**OOB**)!
+
+-   To provide an unbiased evaluation of the final model and to assess its performance, results are then predicted over unused observations (*prediction phase*), defined as the **testing dataset**.
+
+The training/testing division was already made at the very beginning of the work. 607 landslide events have been set aside (events between 2010 and 2023) to test the model once the susceptibility map has been created. 
+
+As for the training/validation separation, we will divide the Swiss territory into small blocks and, thanks to cross-validation, the blocks will be used alternately for both training and validation.
+
+Since our input data (LS_input) is in .csv format and we need to separate the classes spatially, I will start by re-exporting the file to .shp using ArcGIS Pro.
+
+## 3.1.1) Dowload LS_input.shp data
+
+It is important to check that the data is in digital format for features and in factor format for type2.
+
+```{r}
+# Dowload LS_input in shp format
+LS_shp <- st_read("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/LS_input_shp/LS_input_shp.shp")
+```
+
+```{r}
+# Set the columns of explanatory variables to numeric (otherwise not taken into account by the RF model)
+LS_shp$DEM <- as.numeric(as.character(LS_shp$DEM))
+LS_shp$TWI <- as.numeric(as.character(LS_shp$TWI))
+LS_shp$planCurv <- as.numeric(as.character(LS_shp$planCurv))
+LS_shp$profCurv <- as.numeric(as.character(LS_shp$profCurv))
+LS_shp$Slope <- as.numeric(as.character(LS_shp$Slope))
+LS_shp$Flow_Accum <- as.numeric(as.character(LS_shp$Flow_Accum))
+LS_shp$Flow_Direc <- as.numeric(as.character(LS_shp$Flow_Direc))
+LS_shp$Dist_Route <- as.numeric(as.character(LS_shp$Dist_Route))
+LS_shp$Dist_Autor <- as.numeric(as.character(LS_shp$Dist_Autor))
+LS_shp$Dist_Fussw <- as.numeric(as.character(LS_shp$Dist_Fussw))
+LS_shp$LandCover <- as.factor(as.character(LS_shp$LandCover))
+LS_shp$Geology <- as.factor(as.character(LS_shp$Geology))
+LS_shp$type2 <- as.factor(LS_shp$type2)  # Convertir en facteur
+
+# Check the data types of the first 12 columns of LS_shp and the structure of LS_shp
+sapply(LS_shp[, 1:12], class)
+str(LS_shp)
+```
+#  3.1.2) Plot type 0/1
+Below, we can visualise the presences and pseudo-absences:
+
+```{r}
+library(ggplot2)
+
+ggplot(LS_shp, aes(x = X, y = Y, color = as.factor(type2))) + # what is plot
+  geom_point(size = 1) +  # Size of the point
+  scale_color_manual(values = c("blue", "red"), labels = c("Absence (0)", "Presence (1)")) + # colors and labels of the points
+  labs(title = "Repartition of presence and pseudos absence of LS",
+       x = "Longitude (X)", 
+       y = "Latitude (Y)",
+       color = "Type") +
+  theme_minimal() +
+  coord_fixed()  # Maintain the correct ratio between X and Y
+```
+# 3.2) Optimization
+
+# 3.2.1) Preparing the dataset for optimisation
+```{r}
+LS_shp_rf <- LS_shp %>% st_drop_geometry() %>% select(-X, -Y) # Removal of the geometry column, which poses a problem for optimisation, as well as the X and Y columns
+```
+
+No need to run optimisation ntree and mtry since the result is known and it takes a little time.
+
+# 3.2.2) Optimization of ntree and mtry parameters
+```{r}
+library(randomForest)
+library(caret)
+
+
+# Define parameter grid
+ntree_vals <- c(100, 200, 300, 400, 500)
+mtry_vals <- c(1, 2, 3, 4, 5, 6)
+
+# Initialise to store results
+results <- data.frame(ntree=integer(), mtry=integer(), Accuracy=double())
+
+# Cross-validation
+control <- trainControl(method="cv", number=3) # 3-folds
+
+# Grid Search manual
+for (ntree in ntree_vals) {
+  for (mtry in mtry_vals) {
+    set.seed(42)
+    model <- train(
+      type2 ~ ., 
+      data=LS_shp_rf, # data used = without geometry and X/Y columns
+      method="rf", 
+      metric="Accuracy",
+      tuneGrid=data.frame(mtry=mtry),
+      trControl=control,
+      ntree=ntree
+    )
+    results <- rbind(results, data.frame(ntree=ntree, mtry=mtry, Accuracy=max(model$results$Accuracy)))
+  }
+}
+
+# Display the best results
+best <- results[which.max(results$Accuracy), ]
+print("Best combinations :")
+print(best)
+
+```
+The best combination is ntree = 300 and mtry = 6
+
+Now we need to test which values to use for the block size and the number of folds in order to run the model with the validated parameters.
+
+In the code below, we decide to perform cross-validation on the LS_input data by testing several configurations: theRange represents the side length of the blocks (they are square in all cases), k represents the number of folds. We try blocks with sides of 20, 30, 40, 50, and 60 km and try k values of 3, 5, 7, and 9.
+
+Thanks to the blockCV library, the different k values and ranges are created. Next, a table is created to store the results. Then a loop is created so that each time k-1 folds are used for training and 1 fold for validation, then each fold must take the place of validation and once everyone has passed, we average the AUC obtained for each of the configurations and the average comes out as the results.
+
+
+# 3.2.3) Optimization of the best combination with block side size and number of folds
+```{r}
+library(randomForest)
+library(blockCV)
+library(pROC)
+library(dplyr)
+
+# Create a data frame to store the results
+results <- data.frame(theRange = numeric(0), k = numeric(0), AUC_CV = numeric(0), AUC_Test = numeric(0))
+
+# Dictionary to store the trained models
+all_models <- list()
+
+# Values previously defined for ntree and mtry
+ntree_values <- c(300)  # Values defined for ntree
+mtry_values <- c(6)  # Values defined for mtry
+
+# Loop over block sizes and number of folds
+for (theRange in c(20000, 30000, 40000, 50000, 60000)) { # in m
+  for (k in c(3, 5, 7, 9)) {
+    for (ntree in ntree_values) {
+      for (mtry in mtry_values) {
+        print(paste("Testing with theRange =", theRange, ", k =", k, ", ntree =", ntree, ", mtry =", mtry))
+        
+        # Create the spatial validation blocks
+        cv_blocks <- spatialBlock(
+          speciesData = LS_shp,
+          species = "type2",
+          rasterLayer = NULL,
+          theRange = theRange,
+          k = k,
+          selection = "random",
+          iteration = 100,
+          numLimit = 5
+        )
+        
+        # Extract the fold indices
+        folds <- cv_blocks$folds
+        auc_values <- c()  # Store the AUC values for each fold
+        
+        # Loop over the folds
+        for (fold_id in 1:length(folds)) {
+          # Divide in train and validation (test) set
+          trainSet <- unlist(folds[[fold_id]][1])  
+          testSet <- unlist(folds[[fold_id]][2])   
+          
+          # Create the train and validation (test) subsets
+          train_data <- LS_shp[trainSet, ] %>% st_drop_geometry() %>% select(-X, -Y)
+          test_data <- LS_shp[testSet, ] %>% st_drop_geometry() %>% select(-X, -Y)
+          x_test <- test_data %>% select(-type2)
+          y_test_rf <- as.numeric(test_data$type2)
+
+          # Train a Random Forest model with ntree and mtry
+          RF_model <- randomForest(type2 ~ ., data = train_data, ntree = ntree, mtry = mtry)
+          
+          # Predict the probabilities
+          RF_pred <- predict(RF_model, newdata = test_data, type = "response")
+          RF_pred_numeric <- as.numeric(RF_pred) - 1  
+          
+          # Calculate the AUC for this fold
+          roc_curve <- roc(test_data$type2, RF_pred_numeric)
+          auc_value <- auc(roc_curve)
+          auc_values <- c(auc_values, auc_value)
+        }
+        
+        # Calculate the average AUC across the folds
+        mean_auc_cv <- mean(auc_values)
+        
+        # Train a model on the entire LS_shp for future predictions
+        final_model <- randomForest(type2 ~ ., data = LS_shp %>% st_drop_geometry() %>% select(-X, -Y),         ntree = ntree, mtry = mtry)
+        
+        # Store the trained model
+        model_name <- paste0("Range", theRange, "_k", k, "_ntree", ntree, "_mtry", mtry)
+        all_models[[model_name]] <- final_model
+        
+        # Add the results to the dataframe
+        results <- rbind(results, data.frame(theRange = theRange, k = k, ntree = ntree, mtry = mtry, AUC_CV = mean_auc_cv))
+      }
+    }
+  }
+}
+
+# Results of the cross-validation
+print(results)
+
+```
+# Save data
+```{r}
+  probs_rf_val <- RF_pred_numeric
+  y_rf_val <- y_test_rf
+  save(probs_rf_val, y_rf_val, file = "roc_rf_data_val.RData")
+```
+
+
+# 3.2.4) Find the best model among the tested combinations
+```{r}
+# Find the best configuration based on the average AUC (AUC_CV)
+best_row <- results[which.max(results$AUC_CV), ]
+print (best_row)
+```
+The best combination is a block size of 60 km and a number of folds equal to 3.
+
+# 4) Output of RF
+This graph allows tracking the model's performance during training, particularly to see if the OOB error decreases with the number of trees (model stability), compare prediction errors for each class, and detect potential overfitting if the error keeps dropping without stabilizing.
+
+```{r}
+plot(final_model)
+legend(x="topright", legend=c("pred 0", "pred 1", "OOB error"), 
+ col=c("red", "green", "black"), lty=1:2, cex=0.8)
+```
+Here we can see that the error stabilizes quite quickly with the number of trees; a higher number of trees would not have been necessary.
+
+```{r}
+# Show the predicted probability values
+RF.predict <- predict(final_model,type="prob")
+head(RF.predict) # 0==pseudo-absence ; 1== presence
+str(RF.predict)
+```
+
+
+Here we can see the first 6 rows of the RF.predict matrix, to view a sample of these probabilities. For example, the first row tells us that for the first observation, the model estimates a 12% chance of absence (class 0) and an 88% chance of presence (class 1).
+
+# 5) Model evaluation
+To test the model with the ROC curve, the test set must contain an equal number of presences and pseudo-absences. I need to create them, but first I extract the values at each landlides points for the test set (only presence).
+
+## 5.1) Extract raster values for the temporal test set
+I had set aside 607 landslides as a temporal test set to re-test my model at the end on completely independent data (temporally). I extract the data at each landslide point in the same way as with the training and validation data.
+
+```{r}
+# Load the values of the temporal test set
+test_set_temp <- st_read("C:/Users/Mathilde/Desktop/Clip_TIFF_2/Test_set_temp_shp/Test_set_temp_shp.shp")
+
+# Extract raster values at each landslides points
+test_set_temp_vals <- extract(features, as(test_set_temp, "Spatial"))
+
+# Add the raster data to the pseudo-absences
+test_set_temp_data <- cbind(test_set_temp, test_set_temp_vals)
+
+# Convert to dataframe
+test_set_temp_data_df <- as.data.frame(test_set_temp_data)
+colnames(test_set_temp_data_df)[1] <- "ID"
+
+# Delete the columns 2, 3, 4, 5, 8 et 9
+test_set <- test_set_temp_data_df %>% select(-c(2, 3, 4, 5, 6, 7, 8, 9))
+
+# Verify the result
+head(test_set)
+```
+
+# 5.1.1) Extract features for the pseudo-absences created for the test set
+To have a complete test set, it is also necessary to create pseudo-absences. To be able to create the ROC curve as well as the confusion matrix, the test set must contain both presences and absences. The same process was used as for the pseudo-absences in the input data. The validity domain to create the pseudo-absences was defined as follows:
+
+- A 6 km diameter buffer around landslides present in the input data
+
+- A 6 km diameter buffer around landslides present in the test set
+
+- A 10 m diameter buffer around the pseudo-absences created for the input set
+
+  → Lakes and these three buffer zones were removed from the Swiss territory to create the validity    domain, and then the pseudo-absences were created (608 because it was not possible to create exactly 607).
+ 
+```{r}
+# Load the pseudos-absence for the test set
+pseudo_absences_test_set <- st_read("C:/Users/Mathilde/Desktop/Clip_TIFF_2/Pseudos_absences_test_set_temp/Pseudo_absences_test_set/Psedo_absences_test_set_1.shp")
+
+# Extract raster values at each landslides points
+pseudo_absences_test_set_vals <- extract(features, as(pseudo_absences_test_set, "Spatial"))
+
+# Add the raster values to the pseudo-absences
+pseudo_absences_test_set_data <- cbind(pseudo_absences_test_set, pseudo_absences_test_set_vals)
+
+# Convert to dataframe
+pseudo_absences_test_set_data_df <- as.data.frame(pseudo_absences_test_set_data)
+colnames(pseudo_absences_test_set_data_df)[1] <- "ID"
+```
+# 5.1.2) Add a column "type" with 0 for pseudo-absences and 1 for presences
+```{r}
+test_set$type <- 1
+pseudo_absences_test_set_data_df$type <- 0
+```
+
+# 5.1.3) Merge the presence and pseudo-absence data tables for the test set
+```{r}
+Temp_test <- rbind(test_set, pseudo_absences_test_set_data_df)
+table(Temp_test$type)
+```
+
+# 5.1.4) Finalize the second test set
+```{r}
+# Convert Land cover and Geology classes as factor
+Temp_test$LandCover<-as.factor(Temp_test$LandCover)
+Temp_test$Geology<-as.factor(Temp_test$Geology)
+
+# Remove extra column (ID)
+Temp_test <- Temp_test[-1]
+
+# Explore the newly created input dataset.
+head(Temp_test)
+str(Temp_test)
+
+write.csv(Temp_test, "Temp_test.csv", row.names = FALSE) # Export final files
+```
+
+# 5.2) Rename columns to make them consistent between train_data/test_data and Temp_test
+
+```{r}
+# Rename columns in the test set to match the training set
+names(Temp_test)[names(Temp_test) == "Flow_Accumulation"] <- "Flow_Accum"
+names(Temp_test)[names(Temp_test) == "Flow_Direction"] <- "Flow_Direc"
+names(Temp_test)[names(Temp_test) == "Dist_Routes"] <- "Dist_Route"
+names(Temp_test)[names(Temp_test) == "Dist_Autoroutes"] <- "Dist_Autor"
+names(Temp_test)[names(Temp_test) == "Dist_Fussweg"] <- "Dist_Fussw"
+```
+
+# 5.2.1) Force training and testing to have the same levels
+```{r}
+# Retrieve the data types in the training set
+train_data <- LS_shp %>% st_drop_geometry() %>% select(-X, -Y)
+
+# Ensure that the same categorical columns have the same levels
+Temp_test$LandCover <- factor(Temp_test$LandCover, levels = levels(train_data$LandCover))
+Temp_test$Geology   <- factor(Temp_test$Geology, levels = levels(train_data$Geology))
+```
+
+If I want to plot presences and pseudo-absences for the test set, I need to add X and Y to the data. I think I can extract them from the geometry.
+
+## 5.3) Model evaluation : ROC Curve
+
+The prediction capability of the implemented RF model can be evaluated by predicting the results over previously unseen data, that is the testing dataset.
+The *Area Under the "Receiver Operating Characteristic (ROC)" Curve* (**AUC**) represents the evaluation score used here as indicator of the goodness of the model in classifying areas more susceptible to landslides.
+ROC curve is a graphical technique based on the plot of the percentage of correct classification (the true positives rate) against the false positives rate (occurring when an outcome is incorrectly predicted as belonging to the class "1" when it actually belongs to the class "0"), evaluates for many thresholds.
+The AUC value lies between 0.5, denoting a bad classifier, and 1, denoting an excellent classifier.
+
+```{r}
+# Predictions of the positive class probabilities on the test data
+probs_presence <- predict(final_model, Temp_test, type = "prob")[, "1"]
+
+# True observed classes
+true_labels <- Temp_test$type 
+
+# Calculate and plot the ROC curve
+roc_obj <- roc(true_labels, probs_presence)
+
+# Vizualisation
+plot(roc_obj, col = "blue", lwd = 2, main = "Courbe ROC - Random Forest")
+auc_value <- auc(roc_obj)
+legend("bottomright", legend = paste("AUC =", round(auc_value, 3)), col = "blue", lwd = 2)
+
+```
+The AUC value is very high due to the pseudo-absences being placed in geographically distinct areas compared to the presences. As a result, the model is very good at distinguishing between the two classes. Ideally, another method should have been used to generate pseudo-absences so that they are spatially closer to the presences. However, during the optimization phase, the average AUC values were much lower — closer to 0.85–0.88 — even though the pseudo-absences were created in exactly the same way.
+
+# Save data
+```{r}
+probs_rf_test = probs_presence
+y_rf_test = true_labels
+save(probs_rf_test, y_rf_test, file = "roc_rf_test.RData")
+```
+
+
+# 5.4) Confusion matrix
+```{r}
+# Threshold can be modified here
+threshold <- 0.5
+
+# Binary predictions
+pred_class <- ifelse(probs_presence >= threshold, 1, 0)
+```
+
+```{r}
+library(caret)
+
+# Convert to factors with the same levels
+true_class <- factor(true_labels, levels = c(0, 1))
+pred_class_factor <- factor(pred_class, levels = c(0, 1))
+
+# Confusion matrix
+conf_mat <- confusionMatrix(pred_class_factor, true_class, positive = "1")
+
+# Display the matrix and the statistics
+print(conf_mat)
+conf_mat$byClass["F1"]
+precision <- conf_mat$byClass["Precision"]
+print(precision)
+```
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Matrix created before
+mat <- as.table(conf_mat$table)
+
+# Plot
+ggplot(as.data.frame(mat), aes(Prediction, Reference)) +
+  geom_tile(aes(fill = Freq), color = "white") +
+  geom_text(aes(label = Freq), vjust = 1) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  theme_minimal() +
+  labs(title = "Confusion matrix (RF)", fill = "Number")
+```
+
+# 5.5) Variable importance plot
+The variable importance plot is generated from the final model.
+
+```{r}
+library(ggplot2)
+
+# Extract variable importance (Gini index)
+var_imp <- importance(final_model, type = 2)  # type = 2: MeanDecreaseGini
+
+# Sort variables by decreasing importance
+var_imp_sorted <- var_imp[order(var_imp[, 1], decreasing = TRUE), , drop = FALSE]
+
+# Select top 12 most important variables
+top_vars <- head(var_imp_sorted, 12)
+
+# Create a data frame for ggplot
+df_imp <- data.frame(
+  Variable = rownames(top_vars),
+  Importance = top_vars[, 1]
+)
+
+# Plot horizontal barplot (variables on y-axis)
+ggplot(df_imp, aes(x = Importance, y = reorder(Variable, Importance))) +
+  geom_bar(stat = "identity", fill = "lightgray") +
+  labs(title = "Variable Importance (Gini Index)",
+       x = "Mean Decrease in Gini",
+       y = "Variables") +
+  theme_minimal()+
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+```
+Voir si cela pourrait être intéressant de faire le plot avec Mean Decrease Accuracy. A discuter avec Marj et Jacques.
+
+# 5.6) Partial Dependance Plot (PDP)
+Like the variable importance plot, the partial dependence plots are generated from the final model.
+
+```{r}
+# Slope
+p_slope <- partialPlot(final_model, train_data, x.var = Slope, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Slope [Â°]", main = "", ylab = "Predicted probability (partial dependence)")
+
+# Elevation
+p_dem <- partialPlot(final_model, train_data, x.var = DEM, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Elevation [m]", main = "",ylab = "Prediction probability")
+
+# Flow Accumulation
+p_fowacc <- partialPlot(final_model, train_data, x.var = Flow_Accum, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Flow Accumulation [?]", main = "",ylab = "Prediction probability")
+# Flow direction
+p_flowdir <- partialPlot(final_model, train_data, x.var = Flow_Direc, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Flow Direction [?]", main = "",ylab = "Prediction probability")
+
+# Profile curvature
+p_profcurv <- partialPlot(final_model, train_data, x.var = profCurv, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Profile curvature [1/m]", main = "", ylab = "Prediction probability", xlim = c(-0.04,0.04))
+
+# Plan Curvature
+p_plancurv <- partialPlot(final_model, train_data, x.var = planCurv, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Plan curvature [1/m]", main = "", ylab = "Prediction probability", xlim = c(-0.04,0.04))
+
+# Distance to road
+p_dist_routes <- partialPlot(final_model, train_data, x.var = Dist_Route, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Distance to road [m]", main = "", ylab = "Prediction probability")
+
+# Distance to Autoroutes
+p_dist_autor <- partialPlot(final_model, train_data, x.var = Dist_Autor, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Distance to autoroutes [m]", main = "", ylab = "Prediction probability")
+
+# Distance to Fussweg
+p_distfussw <- partialPlot(final_model, train_data, x.var = Dist_Fussw, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Distance to Fussweg [m]", main = "", ylab = "Prediction probability")
+
+# Topographic wetness index (TWI)
+p_twi <- partialPlot(final_model, train_data, x.var = TWI, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "TWI [-]", main = "", ylab = "Prediction probability")
+
+# Geology
+p_geol <- partialPlot(final_model, train_data, x.var = Geology, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Geology", main = "", ylab = "Prediction probability")
+
+# LandCover
+p_landcover <- partialPlot(final_model, train_data, x.var = LandCover, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Land Cover", main = "", ylab = "Prediction probability")
+
+```
+
+# 5.6.1) Partial Dependance Plot in 1 plot
+
+```{r}
+library (ggplot2)
+library(gridExtra)
+p_slope_gg <- ggplot(data.frame(p_slope), aes(x=x, y=y)) + geom_line() +ggtitle("Slope")
+p_dem_gg <- ggplot(data.frame(p_dem), aes(x=x, y=y)) + geom_line() +ggtitle("DEM")
+p_flowacc_gg <- ggplot(data.frame(p_fowacc), aes(x=x, y=y)) + geom_line() +ggtitle("FlowAcc")
+p_flowdir_gg <- ggplot(data.frame(p_flowdir), aes(x=x, y=y)) + geom_line() +ggtitle("FlowDir")
+p_profcurv_gg <- ggplot(data.frame(p_profcurv), aes(x=x, y=y)) + geom_line() +ggtitle("ProfCurv")
+p_plancurv_gg <- ggplot(data.frame(p_plancurv), aes(x=x, y=y)) + geom_line() +ggtitle("PlanCurv")
+p_dist_route_gg <- ggplot(data.frame(p_dist_routes), aes(x=x, y=y)) + geom_line() +ggtitle("Dist_routes")
+p_dist_autor_gg <- ggplot(data.frame(p_dist_autor), aes(x=x, y=y)) + geom_line() +ggtitle("Dist_autoroutes")
+p_dist_fussw_gg <- ggplot(data.frame(p_distfussw), aes(x=x, y=y)) + geom_line() +ggtitle("Dist_fussweg")
+p_twi_gg <- ggplot(data.frame(p_twi), aes(x=x, y=y)) + geom_line() +ggtitle("TWI")
+p_geol_gg <- ggplot(data.frame(p_geol), aes(x=x, y=y)) + geom_col() +ggtitle("Geology")
+p_landcover_gg <- ggplot(data.frame(p_landcover), aes(x=x, y=y)) + geom_col() +ggtitle("Landcover")
+
+grid.arrange(p_slope_gg, p_dem_gg, p_flowacc_gg, p_flowdir_gg, p_plancurv_gg, p_profcurv_gg, p_dist_route_gg, p_dist_autor_gg, p_dist_fussw_gg, p_twi_gg, p_geol_gg, p_landcover_gg, nrow=4)
+```
+
+# 5.6.2) Zoom on certain variables
+```{r}
+# Elevation
+p_dem <- partialPlot(final_model, train_data, x.var = DEM, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Elevation [m]", main = "",ylab = "Predicted probability (partial dependence)",  xlim = c(300, 3000))  # Zoom on 300-3000 m
+```
+
+```{r}
+# Distance to road
+p_dist_routes <- partialPlot(final_model, train_data, x.var = Dist_Route, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Distance to road [m]", main = "", ylab = "Predicted probability (partial dependence)", xlim = c(0,2000))
+```
+
+```{r}
+# Distance to Autoroutes
+p_dist_autor <- partialPlot(final_model, train_data, x.var = Dist_Autor, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Distance to autoroutes [m]", main = "", ylab = "Partial dependence", xlim = c(0, 10000))
+```
+
+```{r}
+# Distance to Roads
+p_dist_routes <- partialPlot(final_model, train_data, x.var = Dist_Route, rug = TRUE, which.class = final_model$classes[2],
+            xlab= "Distance to roads [m]", main = "", ylab = "Partial dependence", xlim = c(0, 3000))
+```
+
+# 6) Susceptibility map
+
+I have now all the elements to elaborate the final landslide susceptibility map.
+This will be achieved by making predictions (of presence only) based on the values of the predictors, which are stored into the RasterStack named \*features\*, created above.
+```{r}
+# The column names in train_data and features must be the same
+names(features) <- c("DEM", "TWI", "planCurv", "profCurv", 
+                     "Slope", "Flow_Accum", "Flow_Direc", "Dist_Route", 
+                     "LandCover", "Geology", "Dist_Autor","Dist_Fussw")
+
+print(names(train_data))  # Variables used for the training
+print(names(features))  # Variables in the Rasterstack
+
+# The names are the same.
+```
+
+# 6.1) Creation of the susceptibility map with equal intervals
+```{r Scp-map, results = FALSE}
+
+# Index=2 indicate the prediction of presence (1) 
+Scp_pred <- predict(features, final_model, type="prob", index=2)
+
+# Summary statistics
+summary(Scp_pred)
+hist(Scp_pred)
+
+# Export raster
+writeRaster(Scp_pred,"Scp_map.tif", overwrite=TRUE)
+
+# Plot the output susceptibility map
+library("RColorBrewer")
+plot(Scp_pred, xlab = "East [m]", ylab = "North [m]", 
+     main = "Landslides susceptibility map", 
+     col = terrain.colors(5))
+```
+
+# 6.1.1) Other color scales: with summary statistics
+```{r}
+brk<-c(0, 0.03, 0.14, 0.4, 1) # summary statistics instead of equal intervals
+
+plot(Scp_pred, xlab = "East [m]", ylab = "North [m]", 
+     main = "Landslides susceptibility map", 
+     col = rev(c("brown", "orange", "yellow", "grey")), breaks=brk)
+```
+
+# 6.1.2) Other color scales: using quantiles
+```{r}
+# Output predicted values are transformed to a vector
+pred.vect <- as.vector(Scp_pred@data@values)
+
+# The function "quantile" is used to fix classes
+qtl.pred <- quantile(pred.vect,probs=c(0.25,0.5,0.75,0.85,0.95), na.rm = TRUE)
+
+# And then extract the corresponding values
+qtl.int<- c(0,0.0567,0.3567,0.74,0.8633,0.9633,1)
+plot(Scp_pred, xlab = "East [m]", ylab = "North [m]", 
+     main = "Landslides susceptibility map (RF)", 
+     col = (c("darkgreen", "lightgreen", "yellow", "orange", "red", "red4")), breaks = qtl.int)
+```
+
+
+# 7) Test the susceptibility map
+Once the susceptibility map is created, it is necessary to test whether the map can identify new cases using the data we set aside. We then overlay the 607 landslides from the test set onto the susceptibility map, and using the point-to-raster method, we can determine the landslide probability at each test point. By averaging the probabilities across the 607 points, we get 0.85. 
+
+```{r}
+library(raster)
+library(sf)
+
+# Load the susceptibility map
+sc_map <- raster("Scp_map.tif")
+
+# Load the test points
+points <- st_read("C:/Users/Mathilde/Desktop/Clip_TIFF_2_OD/Test_set_temp_shp/Test_set_temp_shp.shp")
+
+# Display the susceptibility map
+plot(sc_map, xlab = "East [m]", ylab = "North [m]", 
+     main = "Landslides susceptibility map with test point", 
+     col = (c("darkgreen", "lightgreen", "yellow", "orange", "red", "red4")), breaks =      qtl.int)
+
+# Add the test points
+plot(st_geometry(points), 
+     add = TRUE, 
+     col = "black", 
+     pch = 20, 
+     cex = 0.6)
+
+```
+
+```{r}
+# Extract the raster values for each point
+valeurs <- extract(sc_map, st_coordinates(points))
+
+mean(valeurs, na.rm = TRUE) # mean probability
+```
+
+
